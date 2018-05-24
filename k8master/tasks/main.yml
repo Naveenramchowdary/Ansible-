@@ -1,0 +1,96 @@
+---
+# tasks file for k8master
+ - name: Disable Selinux
+   selinux: state=disabled
+
+ - name: Swapoff
+   shell: swapoff -a
+
+ - name: Stop firewall
+   service: name=firewalld state=stopped
+ 
+ - name: Set Hostname
+   hostname: name=k8master
+
+ - name: Copy sysctl file
+   template: src=k8s.conf.j2 dest=/etc/sysctl.d/k8s.conf 
+
+ - name: copy host file
+   template: src=hosts.j2 dest=/etc/hosts
+
+
+ - name: Kernel parameters
+   sysctl: name={{ item }} value=1 sysctl_file=/etc/sysctl.d/k8s.conf state=present reload=yes
+   with_items:
+      - net.bridge.bridge-nf-call-ip6tables
+      - net.bridge.bridge-nf-call-iptables
+
+# - name: set proxy
+#   shell: echo "proxy=http://192.168.11.1:3128">> /etc/yum.conf
+
+
+ - name: Install preirequistes
+   package: name={{ item }}
+   with_items:
+      - yum-utils
+      - device-mapper-persistent-data
+      - lvm2
+      - policycoreutils-python
+
+ - name: Get the docker repo
+   get_url: url=https://download.docker.com/linux/centos/docker-ce.repo dest=/etc/yum.repos.d/
+
+ - name: Set obsoletes to zero 
+   command: sudo sed -i 's/obsoletes=1/obsoletes=0/g' /etc/yum.conf 
+
+ - name: Copy the Kubernetes repo
+   template: src=kubernetes.repo.j2 dest=/etc/yum.repos.d/kubernetes.repo
+
+ - name: Install docker 17.03
+   package: name={{ item }}
+   with_items:
+       - docker-ce-selinux-17.03.1.ce-1.el7.centos
+       - docker-ce-17.03.0.ce-1.el7.centos
+  
+
+ - name: Install kubeadm kubectl kubelet
+   package: name={{ item }}
+   with_items:
+      - kubelet-1.9.6-0
+      - kubeadm-1.9.6-0
+      - kubectl-1.9.6-0
+
+ - name: start docker
+   service: name=docker state=started
+
+ - name: Verify Cgroup driver
+   shell: docker info | grep -i cgroup
+   register: cgroup
+
+ - name: Check cgroup of kubelet
+   shell: cat /etc/systemd/system/kubelet.service.d/10-kubeadm.conf | grep cgroup-driver | cut -d '=' -f4 | cut -d '"' -f1
+   register: kubegroup
+
+ - name: Configure cgroup
+   shell: sed -i "s/cgroup-driver=systemd/cgroup-driver=cgroupfs/g" /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+   when: "cgroup.stdout.find('Cgroup Driver: cgroupfs') != {{'kubegroup'}}"
+
+ - name: Reload Daemon
+   systemd: daemon_reload=yes
+
+ - name: Start service kubelet docker
+   service: name={{ item }} state=restarted enabled=yes
+   with_items:
+       - kubelet
+       - docker
+ - name: check kubemaster initialisation
+   shell: kubectl cluster-info | head -n 1 | awk '{print $6}' | cut -d "/" -f3
+   register: cluster
+   environment:
+       KUBECONFIG: /etc/kubernetes/admin.conf
+
+ - name: Intialize the kubernetes master
+   shell: kubeadm init --apiserver-advertise-address={{ master_ip }}
+   when: "cluster.stdout.find('localhost:6443') != -1"
+   environment:
+       KUBECONFIG: /etc/kubernetes/admin.conf

@@ -1,0 +1,7 @@
+---
+# vars file for k8master
+
+cluster_state: 192.168.11.122:6443
+master_ip: 192.168.11.122
+node1_ip: 192.168.11.123
+node2_ip: 192.168.11.124
